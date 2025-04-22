@@ -5,11 +5,9 @@ import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
-import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
 
-import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -20,14 +18,7 @@ import com.getcapacitor.annotation.Permission;
 import com.zebra.sdk.comm.BluetoothConnectionInsecure;
 import com.zebra.sdk.comm.Connection;
 import com.zebra.sdk.comm.ConnectionException;
-import com.zebra.sdk.graphics.internal.ZebraImageAndroid;
 import com.zebra.sdk.printer.PrinterStatus;
-import com.zebra.sdk.printer.SGD;
-import com.zebra.sdk.printer.ZebraPrinter;
-import com.zebra.sdk.printer.ZebraPrinterFactory;
-import com.zebra.sdk.printer.ZebraPrinterLanguageUnknownException;
-import com.zebra.sdk.printer.ZebraPrinterLinkOs;
-import com.zebra.sdk.printer.discovery.BluetoothDiscoverer;
 import com.zebra.sdk.printer.discovery.DiscoveredPrinter;
 import com.zebra.sdk.printer.discovery.DiscoveryHandler;
 
@@ -38,6 +29,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.HashMap;
 import java.util.Set;
 
 @CapacitorPlugin(
@@ -54,19 +46,18 @@ import java.util.Set;
         }
 )
 public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
-    private static final String LOG_TAG = "MkPrinterPlugin";
-    private PluginCall call;
-    private boolean printerFound;
-    private Connection thePrinterConn;
-    private PrinterStatus printerStatus;
-    private ZebraPrinter printer;
-    private final int MAX_PRINT_RETRIES = 1;
-    private BluetoothAdapter bluetoothAdapter;
+    private PluginCall mCall;
+    private boolean mPrinterFound;
+    private Connection mPrinterConn;
+    private PrinterStatus mPrinterStatus;
+    private BluetoothAdapter mBluetoothAdapter;
 
-    public MkPrinterPlugin() { }
+    private final String LOG_TAG = "MkPrinterPlugin";
+
+    public MkPrinterPlugin() {}
 
     @PluginMethod
-    public void printText(PluginCall call){
+    public void printText(PluginCall call) {
         try {
             String printText = call.getString("rows");
 
@@ -82,21 +73,21 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
     }
 
     @PluginMethod
-    public void printImage(PluginCall call)  {
+    public void printImage(PluginCall call) {
         String base64Data = call.getString("base64Data");
 
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    Looper.prepare();
-
                     PrinterInstance mPrinter = PrintUtils.getCurrentPrinter(getContext());
+                    if (mPrinter == null) {
+                        Log.e(LOG_TAG, "No printer connected");
+                        throw new RuntimeException("No printer connected");
+                    }
                     PrintUtils.printImage(mPrinter, base64Data);
                     call.resolve();
-
-                    Looper.myLooper().quit();
-                } catch (Exception e) {
+                } catch (Throwable e) {
                     call.reject(e.getMessage());
                 }
             }
@@ -104,12 +95,24 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
     }
 
     @PluginMethod
-    public void listenPrinters(PluginCall call) throws JSONException{
-        discoverPrinters(call);
+    public void listenPrinters(PluginCall call) throws JSONException {
+        try {
+            JSONArray deviceList = discoverPrinters();
+            Log.d(LOG_TAG, deviceList.toString());
+
+            JSObject res = new JSObject();
+            res.put("devices", deviceList);
+            call.resolve(res);
+
+        } catch (Exception e) {
+            Log.e(LOG_TAG, e.getMessage());
+            e.printStackTrace();
+            call.reject(e.getMessage());
+        }
     }
 
     @PluginMethod
-    public void connectPrinter(PluginCall call){
+    public void connectPrinter(PluginCall call) {
         try {
             String MACAddress = call.getString("macAddress");
             PrintUtils.connectPrinter(getContext(), MACAddress);
@@ -136,9 +139,10 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
     @PluginMethod
     public void getCurrentPrinter(PluginCall call) {
         try {
+            HashMap <String, String> deviceInfo = PrintUtils.getCurrentDeviceInfo(getContext());
             JSObject res = new JSObject();
-            res.put("name", PrintUtils.bluetoothDevice.getName());
-            res.put("macAddress", PrintUtils.bluetoothDevice.getAddress());
+            res.put("name", deviceInfo.get("name"));
+            res.put("macAddress", deviceInfo.get("address"));
             call.resolve(res);
         } catch (Exception e) {
             Log.e(LOG_TAG, e.getMessage());
@@ -148,7 +152,7 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
     }
 
     @PluginMethod
-    public void openBluetoothSettings(PluginCall call){
+    public void openBluetoothSettings(PluginCall call) {
         Intent intent = new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);
         getActivity().startActivity(intent);
         call.resolve();
@@ -161,41 +165,39 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
         if (bluetoothAdapter.isEnabled()) {
             Log.d(LOG_TAG, "Creating a bluetooth-connection for mac-address " + MACAddress);
 
-            thePrinterConn = new BluetoothConnectionInsecure(MACAddress);
+            mPrinterConn = new BluetoothConnectionInsecure(MACAddress);
 
             Log.d(LOG_TAG, "Opening connection...");
-            thePrinterConn.open();
+            mPrinterConn.open();
             Log.d(LOG_TAG, "connection successfully opened...");
 
             return true;
         } else {
             Log.d(LOG_TAG, "Bluetooth is disabled...");
-            call.reject("Bluetooth is not on.");
+            mCall.reject("Bluetooth is not on.");
         }
 
         return false;
     }
 
     @PluginMethod
-    public void enableBluetooth(PluginCall call){
+    public void enableBluetooth(PluginCall call) {
         Intent intent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
         startActivityForResult(call, intent, "enableBluetoothCallback");
     }
 
     @SuppressLint("MissingPermission")
-    private void discoverPrinters(PluginCall call) throws JSONException  {
-        bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+    private JSONArray discoverPrinters() throws JSONException {
+        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         JSONArray deviceList = new JSONArray();
-        JSObject res = new JSObject();
-        Set< BluetoothDevice > bondedDevices = bluetoothAdapter.getBondedDevices();
 
-        for (BluetoothDevice device: bondedDevices){
+        Set<BluetoothDevice> bondedDevices = mBluetoothAdapter.getBondedDevices();
+
+        for (BluetoothDevice device : bondedDevices) {
             deviceList.put(deviceToJSON(device));
         }
 
-        Log.d(LOG_TAG, deviceList.toString());
-        res.put("devices", deviceList);
-        call.resolve(res);
+        return deviceList;
     }
 
     @SuppressLint("MissingPermission")
@@ -213,25 +215,25 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
     @Override
     public void foundPrinter(DiscoveredPrinter discoveredPrinter) {
         Log.d(LOG_TAG, "Printer found: " + discoveredPrinter.address);
-        if (!printerFound) {
-            printerFound = true;
+        if (!mPrinterFound) {
+            mPrinterFound = true;
             JSObject res = new JSObject();
             res.put("value", discoveredPrinter.address);
-            call.resolve(res);
+            mCall.resolve(res);
         }
     }
 
     @Override
     public void discoveryFinished() {
         Log.d(LOG_TAG, "Finished searching for printers...");
-        if (!printerFound) {
-            call.reject("No printer found. If this problem persists, restart the printer.");
+        if (!mPrinterFound) {
+            mCall.reject("No printer found. If this problem persists, restart the printer.");
         }
     }
 
     @Override
     public void discoveryError(String s) {
         Log.e(LOG_TAG, "An error occurred while searching for printers. Message: " + s);
-        call.reject(s);
+        mCall.reject(s);
     }
 }

@@ -1,8 +1,10 @@
 package com.capacitor.mkprinter.goojprt.util;
 
 
+import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -11,6 +13,9 @@ import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
+import android.util.Log;
+
+import androidx.core.app.ActivityCompat;
 
 import com.android.print.sdk.Barcode;
 import com.android.print.sdk.bluetooth.BluetoothPort;
@@ -23,17 +28,19 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.HashMap;
 import java.util.Properties;
 
 public class PrintUtils {
 
-    public static BluetoothDevice bluetoothDevice;
+    public static BluetoothDevice mBluetoothDevice;
 
     /**
      * Connects to a printer using the provided MAC address
-     * @param context
-     * @param macAddress
-     * @return
+     *
+     * @param context The application context
+     * @param macAddress The MAC address of the printer to connect to
+     * @return PrinterInstance The connected printer instance
      */
     public static PrinterInstance connectPrinter(Context context, String macAddress) {
         PrinterInstance printerInstance = null;
@@ -44,24 +51,41 @@ public class PrintUtils {
 
             // Create handler on main thread for printer callbacks
             BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-            if (bluetoothAdapter != null && bluetoothAdapter.isEnabled()) {
-                // Create handler on main thread for printer callbacks
-                Handler handler = new Handler(Looper.getMainLooper());
 
-                // Use BluetoothPort to establish the connection and get PrinterInstance
-                printerInstance = bluetoothPort.btConnnect(context, macAddress, bluetoothAdapter, handler);
-
-                // Save printer name and MAC address
-                bluetoothDevice = bluetoothAdapter.getRemoteDevice(macAddress);
-
-                // Save connection info for potential future auto-reconnect
-                com.android.print.sdk.util.Utils.saveBtConnInfo(context, macAddress);
+            if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled()) {
+                Log.e("PrintUtils", "Bluetooth adapter not available or not enabled");
+                throw new RuntimeException("Failed to connect to printer: Bluetooth is disabled or unavailable");
             }
-        } catch (Exception e) {
+
+            // Create handler on main thread for printer callbacks
+            Handler handler = new Handler(Looper.getMainLooper());
+
+            // Use BluetoothPort to establish the connection and get PrinterInstance
+            printerInstance = bluetoothPort.btConnnect(context, macAddress, bluetoothAdapter, handler);
+
+            // Add explicit check for null printerInstance, which indicates connection failure
+            if (printerInstance == null) {
+                Log.e("PrintUtils", "Failed to connect: btConnnect returned null");
+                throw new RuntimeException("Failed to connect to printer: Connection attempt returned null");
+            }
+
+            if (!printerInstance.isConnected()) {
+                Log.e("PrintUtils", "Printer instance created but not connected");
+                throw new RuntimeException("Failed to connect to printer: Connection check failed");
+            }
+
+            // Save printer name and MAC address
+            mBluetoothDevice = bluetoothAdapter.getRemoteDevice(macAddress);
+
+            // Save connection info for potential future auto-reconnect
+            Utils.saveBtConnInfo(context, macAddress);
+
+            return printerInstance;
+
+        } catch (Throwable e) {
             e.printStackTrace();
             throw new RuntimeException("Failed to connect to printer", e);
         }
-        return printerInstance;
     }
 
     /**
@@ -78,9 +102,9 @@ public class PrintUtils {
 
     /**
      * Attempts to auto-connect to the last connected printer
-     * @param context
-     * @throws
-     * @return
+     * @param context The application context
+     * @throws RuntimeException If the connection fails
+     * @return PrinterInstance The connected printer instance
      */
     public static PrinterInstance getCurrentPrinter(Context context) {
         PrinterInstance printerInstance = null;
@@ -92,27 +116,169 @@ public class PrintUtils {
 
             // Use btAutoConn before create new connection
             printerInstance = bluetoothPort.btAutoConn(context, bluetoothAdapter, new Handler(Looper.getMainLooper()));
-            if (printerInstance != null) {
-                // Wait for connection to be established !important
-                Thread.sleep(1000);
 
-                // Save printer name and MAC address
-                Properties pro = Utils.getBtConnInfo(context);
-                bluetoothDevice = bluetoothAdapter.getRemoteDevice(pro.getProperty("mac"));
-
-                return printerInstance;
+            // Check if printerInstance is null
+            if (printerInstance == null) {
+                Log.e("PrintUtils", "Failed to connect: btAutoConn returned null");
+                throw new RuntimeException("Failed to connect to printer: Auto-connection attempt returned null");
             }
-        } catch (Exception e) {
+
+            // Check if printerInstance is connected
+            if (!printerInstance.isConnected()) {
+                Log.e("PrintUtils", "Printer instance created but not connected");
+                throw new RuntimeException("Failed to connect to printer: Auto-connection check failed");
+            }
+
+            // Wait for connection to be established !important
+            Thread.sleep(1000);
+
+            // Save printer name and MAC address
+            Properties pro = Utils.getBtConnInfo(context);
+            mBluetoothDevice = bluetoothAdapter.getRemoteDevice(pro.getProperty("mac"));
+
+            return printerInstance;
+
+        } catch (Throwable e) {
+            Log.e("PrintUtils", "Error while getting current printer: " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException("Failed to connect to printer", e);
         }
-        return printerInstance;
     }
 
-    public static BluetoothDevice getBluetoothDevice() {
-        return bluetoothDevice;
+   /**
+    * Returns information about the currently connected Bluetooth device
+    * @return HashMap containing device name and address, or null values if no device connected
+    */
+   public static HashMap<String, String> getCurrentDeviceInfo(Context context) {
+       HashMap<String, String> deviceInfo = new HashMap<>();
+       boolean permissionGranted = ActivityCompat.checkSelfPermission(
+               context, Manifest.permission.BLUETOOTH) == PackageManager.PERMISSION_GRANTED;
+       if (mBluetoothDevice == null || !permissionGranted) {
+           deviceInfo.put("name", null);
+           deviceInfo.put("address", null);
+       } else {
+           deviceInfo.put("name", mBluetoothDevice.getName());
+           deviceInfo.put("address", mBluetoothDevice.getAddress());
+       }
+
+       return deviceInfo;
+   }
+
+
+    public static void printText(PrinterInstance mPrinter, String text) {
+        mPrinter.init();
+        mPrinter.printText(text);
+        mPrinter.setPrinter(Command.PRINT_AND_WAKE_PAPER_BY_LINE, 2);
     }
 
+    /**
+     * Prints an image to the printer
+     * @param mPrinter The printer instance to use for printing
+     * @param base64Data The base64 encoded image string.
+     * @throws RuntimeException If the image fails to load or print
+     */
+    public static void printImage(PrinterInstance mPrinter, String base64Data) {
+        try {
+            mPrinter.init();
+            //Bitmap bitmapOrigin = BitmapFactory.decodeStream(resources.getAssets().open("receipt_2items.png"));
+            Bitmap bitmapOrigin = convertBase64ToBitmap(base64Data);
+            Bitmap bitmap1 = prepareImageForPrinting(bitmapOrigin);
+            mPrinter.printImage(bitmap1);
+            mPrinter.printText("\n\n\n\n");
+        } catch (Throwable e) {
+            e.printStackTrace();
+            throw new RuntimeException("Failed to load image", e);
+        }
+    }
+
+    /**
+     * Prints an update to the printer
+     * @param resources The application resources
+     * @param mPrinter The printer instance to use for printing
+     * @param filePath The path to the update file
+     */
+    public static void printUpdate(Resources resources, PrinterInstance mPrinter, String filePath) {
+        try {
+
+            FileInputStream fis = new FileInputStream(new File(filePath));
+            //InputStream is = resources.getAssets().open("PT8761-HT-BAT-9170.bin");
+            int length = fis.available();
+            byte[] fileByte = new byte[length];
+            fis.read(fileByte);
+            mPrinter.init();
+            mPrinter.updatePrint(fileByte);
+            fis.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Converts a base64 encoded string to a Bitmap
+     * @param base64Data The base64 encoded image string
+     * @return The decoded Bitmap
+     */
+    private static Bitmap convertBase64ToBitmap(String base64Data) throws IOException {
+       byte[] decodedBytes = Base64.decode(base64Data, Base64.DEFAULT);
+       return BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.length);
+    }
+
+    /**
+     * Prepares an image for printing by resizing and converting to black and white
+     * @param originalBitmap The original Bitmap to be printed
+     * @return Bitmap The prepared Bitmap for printing
+     */
+    private static Bitmap prepareImageForPrinting(Bitmap originalBitmap) {
+        // Lấy kích thước máy in (ví dụ: 384 pixel cho máy in nhiệt)
+        int printerWidth = 384;
+
+        // Tính toán tỷ lệ để giữ nguyên tỷ lệ khung hình
+        float ratio = (float) printerWidth / originalBitmap.getWidth();
+        int newHeight = (int) (originalBitmap.getHeight() * ratio);
+
+        // Thay đổi kích thước hình ảnh phù hợp với máy in
+        Bitmap resizedBitmap = Bitmap.createScaledBitmap(
+                originalBitmap, printerWidth, newHeight, true);
+
+        // Chuyển đổi sang định dạng đen trắng nếu cần (cho máy in nhiệt)
+        return convertToBlackAndWhite(resizedBitmap);
+    }
+
+    /**
+     * Converts a color Bitmap to a black and white Bitmap
+     * @param colorBitmap The color Bitmap to be converted
+     * @return Bitmap The black and white Bitmap
+     */
+    private static Bitmap convertToBlackAndWhite(Bitmap colorBitmap) {
+        int width = colorBitmap.getWidth();
+        int height = colorBitmap.getHeight();
+        Bitmap bwBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
+
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                int pixel = colorBitmap.getPixel(x, y);
+                int r = Color.red(pixel);
+                int g = Color.green(pixel);
+                int b = Color.blue(pixel);
+                int gray = (r + g + b) / 3;
+                int bwPixel = gray < 128 ? Color.BLACK : Color.WHITE;
+                bwBitmap.setPixel(x, y, bwPixel);
+            }
+        }
+        return bwBitmap;
+    }
+
+    /**
+     * Clears the Bluetooth device information
+     */
+    private static void clearBluetoothDeviceInfo() {
+        mBluetoothDevice = null;
+    }
+
+
+
+
+    // ==========================  TESTING  ==========================
     /**
      * Prints a text string to the printer
      * @param mPrinter The printer instance to use for printing
@@ -186,40 +352,13 @@ public class PrintUtils {
         mPrinter.setFont(0, 0, 0, 0);
         mPrinter.setPrinter(Command.ALIGN, 0);
         mPrinter.setPrinter(Command.PRINT_AND_WAKE_PAPER_BY_LINE, 3);
-
-    }
-
-    public static void printText(PrinterInstance mPrinter, String text) {
-        mPrinter.init();
-        mPrinter.printText(text);
-        mPrinter.setPrinter(Command.PRINT_AND_WAKE_PAPER_BY_LINE, 2);
-    }
-
-    /**
-     * Prints an image to the printer
-     * @param mPrinter
-     * @param base64Data
-     */
-    public static void printImage(PrinterInstance mPrinter, String base64Data) {
-        mPrinter.init();
-        Bitmap bitmap1 = null;
-        try {
-            //Bitmap bitmapOrigin = BitmapFactory.decodeStream(resources.getAssets().open("receipt_2items.png"));
-            Bitmap bitmapOrigin = convertBase64ToBitmap(base64Data);
-            bitmap1 = prepareImageForPrinting(bitmapOrigin);
-        } catch (Exception e) {
-            e.printStackTrace();
-            throw new RuntimeException("Failed to load image", e);
-        }
-        mPrinter.printImage(bitmap1);
-        mPrinter.printText("\n\n\n\n");
     }
 
     /**
      * Prints a barcode to the printer
      * @param mPrinter
      */
-    public static void printBarcode(PrinterInstance mPrinter) {
+    public static void printBarcodeTest(PrinterInstance mPrinter) {
 
         mPrinter.init();
         mPrinter.printText(("R.string.print") + "BarcodeType.CODE39" + ("R.string.str_show"));
@@ -297,7 +436,7 @@ public class PrintUtils {
     }
 
 
-    public static void printBigData(Resources resources, PrinterInstance mPrinter) {
+    public static void printBigDataTest(Resources resources, PrinterInstance mPrinter) {
         try {
             InputStream is = resources.getAssets().open("58-big-data-test.bin");
             int length = is.available();
@@ -309,81 +448,5 @@ public class PrintUtils {
         } catch (IOException e) {
             e.printStackTrace();
         }
-    }
-
-
-    public static void printUpdate(Resources resources, PrinterInstance mPrinter, String filePath) {
-        try {
-
-            FileInputStream fis = new FileInputStream(new File(filePath));
-            //InputStream is = resources.getAssets().open("PT8761-HT-BAT-9170.bin");
-            int length = fis.available();
-            byte[] fileByte = new byte[length];
-            fis.read(fileByte);
-            mPrinter.init();
-            mPrinter.updatePrint(fileByte);
-            fis.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Converts a base64 encoded string to a Bitmap
-     * @param base64Data The base64 encoded image string
-     * @return The decoded Bitmap
-     */
-    private static Bitmap convertBase64ToBitmap(String base64Data) throws IOException {
-       byte[] decodedBytes = Base64.decode(base64Data, Base64.DEFAULT);
-       return BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.length);
-    }
-
-    /**
-     * Prepares an image for printing by resizing and converting to black and white
-     * @param originalBitmap
-     * @return
-     */
-    private static Bitmap prepareImageForPrinting(Bitmap originalBitmap) {
-        // Lấy kích thước máy in (ví dụ: 384 pixel cho máy in nhiệt)
-        int printerWidth = 384;
-
-        // Tính toán tỷ lệ để giữ nguyên tỷ lệ khung hình
-        float ratio = (float) printerWidth / originalBitmap.getWidth();
-        int newHeight = (int) (originalBitmap.getHeight() * ratio);
-
-        // Thay đổi kích thước hình ảnh phù hợp với máy in
-        Bitmap resizedBitmap = Bitmap.createScaledBitmap(
-                originalBitmap, printerWidth, newHeight, true);
-
-        // Chuyển đổi sang định dạng đen trắng nếu cần (cho máy in nhiệt)
-        return convertToBlackAndWhite(resizedBitmap);
-    }
-
-    /**
-     * Converts a color Bitmap to a black and white Bitmap
-     * @param colorBitmap
-     * @return
-     */
-    private static Bitmap convertToBlackAndWhite(Bitmap colorBitmap) {
-        int width = colorBitmap.getWidth();
-        int height = colorBitmap.getHeight();
-        Bitmap bwBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
-
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < height; y++) {
-                int pixel = colorBitmap.getPixel(x, y);
-                int r = Color.red(pixel);
-                int g = Color.green(pixel);
-                int b = Color.blue(pixel);
-                int gray = (r + g + b) / 3;
-                int bwPixel = gray < 128 ? Color.BLACK : Color.WHITE;
-                bwBitmap.setPixel(x, y, bwPixel);
-            }
-        }
-        return bwBitmap;
-    }
-
-    private static void clearBluetoothDeviceInfo() {
-        bluetoothDevice = null;
     }
 }
