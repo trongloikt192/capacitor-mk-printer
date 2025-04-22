@@ -42,61 +42,64 @@ public class PrintUtils {
      * @param macAddress The MAC address of the printer to connect to
      * @return PrinterInstance The connected printer instance
      */
-    public static PrinterInstance connectPrinter(Context context, String macAddress) {
-        PrinterInstance printerInstance = null;
-        clearBluetoothDeviceInfo();
-
-        try {
-            BluetoothPort bluetoothPort = new BluetoothPort();
-
-            // Create handler on main thread for printer callbacks
-            BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-
-            if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled()) {
-                Log.e("PrintUtils", "Bluetooth adapter not available or not enabled");
-                throw new RuntimeException("Failed to connect to printer: Bluetooth is disabled or unavailable");
-            }
-
-            // Create handler on main thread for printer callbacks
-            Handler handler = new Handler(Looper.getMainLooper());
-
-            // Use BluetoothPort to establish the connection and get PrinterInstance
-            printerInstance = bluetoothPort.btConnnect(context, macAddress, bluetoothAdapter, handler);
-
-            // Add explicit check for null printerInstance, which indicates connection failure
-            if (printerInstance == null) {
-                Log.e("PrintUtils", "Failed to connect: btConnnect returned null");
-                throw new RuntimeException("Failed to connect to printer: Connection attempt returned null");
-            }
-
-            if (!printerInstance.isConnected()) {
-                Log.e("PrintUtils", "Printer instance created but not connected");
-                throw new RuntimeException("Failed to connect to printer: Connection check failed");
-            }
-
-            // Save printer name and MAC address
-            mBluetoothDevice = bluetoothAdapter.getRemoteDevice(macAddress);
-
-            // Save connection info for potential future auto-reconnect
-            Utils.saveBtConnInfo(context, macAddress);
-
-            return printerInstance;
-
-        } catch (Throwable e) {
-            e.printStackTrace();
-            throw new RuntimeException("Failed to connect to printer", e);
+    public static PrinterInstance connectPrinter(Context context, String macAddress) throws RuntimeException, InterruptedException {
+        PrinterInstance printerInstance;
+        clearBluetoothDeviceInfo(context);
+        File file = new File(context.getFilesDir(), "btinfo.properties");
+        if (file.exists()) {
+            file.delete();
         }
+
+        BluetoothPort bluetoothPort = new BluetoothPort();
+
+        // Create handler on main thread for printer callbacks
+        BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+
+        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled()) {
+            throw new RuntimeException("Failed to connect to printer: Bluetooth is disabled or unavailable");
+        }
+
+        // Create handler on main thread for printer callbacks
+        Handler handler = new Handler(Looper.getMainLooper());
+
+        // Use BluetoothPort to establish the connection and get PrinterInstance
+        printerInstance = bluetoothPort.btConnnect(context, macAddress, bluetoothAdapter, handler);
+
+        // Add explicit check for null printerInstance, which indicates connection failure
+        if (printerInstance == null) {
+            throw new RuntimeException("Failed to connect to printer: Connection attempt returned null");
+        }
+
+        // Loop to check if the printer is connected, with a timeout 5s
+        int attempts = 0;
+        while (!printerInstance.isConnected() && attempts < 10) {
+            Thread.sleep(500);
+            attempts++;
+        }
+
+        // If the printer is still not connected after 10 attempts, throw an exception
+        if (!printerInstance.isConnected()) {
+            throw new RuntimeException("Failed to connect to printer: Printer instance created but not connected");
+        }
+
+        // Save printer name and MAC address
+        mBluetoothDevice = bluetoothAdapter.getRemoteDevice(macAddress);
+
+        // Save connection info for potential future auto-reconnect
+        Utils.saveBtConnInfo(context, macAddress);
+
+        return printerInstance;
     }
 
     /**
      * Disconnects and closes the printer connection
      * @param context The application context
      */
-    public static void disconnectPrinter(Context context) {
+    public static void disconnectPrinter(Context context) throws InterruptedException {
         PrinterInstance printerInstance = getCurrentPrinter(context);
         if (printerInstance != null && printerInstance.isConnected()) {
             printerInstance.closeConnection();
-            clearBluetoothDeviceInfo();
+            clearBluetoothDeviceInfo(context);
         }
     }
 
@@ -106,43 +109,38 @@ public class PrintUtils {
      * @throws RuntimeException If the connection fails
      * @return PrinterInstance The connected printer instance
      */
-    public static PrinterInstance getCurrentPrinter(Context context) {
-        PrinterInstance printerInstance = null;
-        clearBluetoothDeviceInfo();
+    public static PrinterInstance getCurrentPrinter(Context context) throws InterruptedException {
+        PrinterInstance printerInstance;
+        clearBluetoothDeviceInfo(context);
 
-        try {
-            BluetoothPort bluetoothPort = new BluetoothPort();
-            BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        BluetoothPort bluetoothPort = new BluetoothPort();
+        BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
 
-            // Use btAutoConn before create new connection
-            printerInstance = bluetoothPort.btAutoConn(context, bluetoothAdapter, new Handler(Looper.getMainLooper()));
+        // Use btAutoConn before create new connection
+        printerInstance = bluetoothPort.btAutoConn(context, bluetoothAdapter, new Handler(Looper.getMainLooper()));
 
-            // Check if printerInstance is null
-            if (printerInstance == null) {
-                Log.e("PrintUtils", "Failed to connect: btAutoConn returned null");
-                throw new RuntimeException("Failed to connect to printer: Auto-connection attempt returned null");
-            }
-
-            // Check if printerInstance is connected
-            if (!printerInstance.isConnected()) {
-                Log.e("PrintUtils", "Printer instance created but not connected");
-                throw new RuntimeException("Failed to connect to printer: Auto-connection check failed");
-            }
-
-            // Wait for connection to be established !important
-            Thread.sleep(1000);
-
-            // Save printer name and MAC address
-            Properties pro = Utils.getBtConnInfo(context);
-            mBluetoothDevice = bluetoothAdapter.getRemoteDevice(pro.getProperty("mac"));
-
-            return printerInstance;
-
-        } catch (Throwable e) {
-            Log.e("PrintUtils", "Error while getting current printer: " + e.getMessage());
-            e.printStackTrace();
-            throw new RuntimeException("Failed to connect to printer", e);
+        // Check if printerInstance is null
+        if (printerInstance == null) {
+            throw new RuntimeException("Failed to connect to printer: Auto-connection attempt returned null");
         }
+
+        // Loop to check if the printer is connected, with a timeout 5s
+        int attempts = 0;
+        while (!printerInstance.isConnected() && attempts < 10) {
+            Thread.sleep(500);
+            attempts++;
+        }
+
+        // If the printer is still not connected after 10 attempts, throw an exception
+        if (!printerInstance.isConnected()) {
+            throw new RuntimeException("Failed to connect to printer: Printer instance created but not connected");
+        }
+
+        // Save printer name and MAC address
+        Properties pro = Utils.getBtConnInfo(context);
+        mBluetoothDevice = bluetoothAdapter.getRemoteDevice(pro.getProperty("mac"));
+
+        return printerInstance;
     }
 
    /**
@@ -153,6 +151,7 @@ public class PrintUtils {
        HashMap<String, String> deviceInfo = new HashMap<>();
        boolean permissionGranted = ActivityCompat.checkSelfPermission(
                context, Manifest.permission.BLUETOOTH) == PackageManager.PERMISSION_GRANTED;
+
        if (mBluetoothDevice == null || !permissionGranted) {
            deviceInfo.put("name", null);
            deviceInfo.put("address", null);
@@ -177,18 +176,13 @@ public class PrintUtils {
      * @param base64Data The base64 encoded image string.
      * @throws RuntimeException If the image fails to load or print
      */
-    public static void printImage(PrinterInstance mPrinter, String base64Data) {
-        try {
-            mPrinter.init();
-            //Bitmap bitmapOrigin = BitmapFactory.decodeStream(resources.getAssets().open("receipt_2items.png"));
-            Bitmap bitmapOrigin = convertBase64ToBitmap(base64Data);
-            Bitmap bitmap1 = prepareImageForPrinting(bitmapOrigin);
-            mPrinter.printImage(bitmap1);
-            mPrinter.printText("\n\n\n\n");
-        } catch (Throwable e) {
-            e.printStackTrace();
-            throw new RuntimeException("Failed to load image", e);
-        }
+    public static void printImage(PrinterInstance mPrinter, String base64Data) throws IOException, InterruptedException {
+        mPrinter.init();
+        //Bitmap bitmapOrigin = BitmapFactory.decodeStream(resources.getAssets().open("receipt_2items.png"));
+        Bitmap bitmapOrigin = convertBase64ToBitmap(base64Data);
+        Bitmap bitmap1 = prepareImageForPrinting(bitmapOrigin);
+        mPrinter.printImage(bitmap1);
+        mPrinter.printText("\n\n\n\n");
     }
 
     /**
@@ -271,7 +265,7 @@ public class PrintUtils {
     /**
      * Clears the Bluetooth device information
      */
-    private static void clearBluetoothDeviceInfo() {
+    private static void clearBluetoothDeviceInfo(Context context) {
         mBluetoothDevice = null;
     }
 

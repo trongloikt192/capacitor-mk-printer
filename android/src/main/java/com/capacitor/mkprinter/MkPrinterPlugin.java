@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -65,7 +66,7 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
             PrintUtils.printText(mPrinter, printText);
             call.resolve();
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(LOG_TAG, e.getMessage());
             e.printStackTrace();
             call.reject(e.getMessage());
@@ -80,14 +81,16 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
             @Override
             public void run() {
                 try {
+                    Looper.prepare();
+
                     PrinterInstance mPrinter = PrintUtils.getCurrentPrinter(getContext());
-                    if (mPrinter == null) {
-                        Log.e(LOG_TAG, "No printer connected");
-                        throw new RuntimeException("No printer connected");
-                    }
                     PrintUtils.printImage(mPrinter, base64Data);
                     call.resolve();
+
+                    Looper.myLooper().quit();
                 } catch (Throwable e) {
+                    Log.e(LOG_TAG, e.getMessage());
+                    e.printStackTrace();
                     call.reject(e.getMessage());
                 }
             }
@@ -104,7 +107,7 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
             res.put("devices", deviceList);
             call.resolve(res);
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(LOG_TAG, e.getMessage());
             e.printStackTrace();
             call.reject(e.getMessage());
@@ -117,7 +120,7 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
             String MACAddress = call.getString("macAddress");
             PrintUtils.connectPrinter(getContext(), MACAddress);
             call.resolve();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(LOG_TAG, e.getMessage());
             e.printStackTrace();
             call.reject(e.getMessage());
@@ -129,7 +132,7 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
         try {
             PrintUtils.disconnectPrinter(getContext());
             call.resolve();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(LOG_TAG, e.getMessage());
             e.printStackTrace();
             call.reject(e.getMessage());
@@ -144,7 +147,7 @@ public class MkPrinterPlugin extends Plugin implements DiscoveryHandler {
             res.put("name", deviceInfo.get("name"));
             res.put("macAddress", deviceInfo.get("address"));
             call.resolve(res);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(LOG_TAG, e.getMessage());
             e.printStackTrace();
             call.reject(e.getMessage());
